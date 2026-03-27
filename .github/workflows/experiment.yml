@@ -45,7 +45,7 @@ jobs:
         working-directory: autocrawl
         env:
           CDP_ENDPOINT: http://localhost:9222
-          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          GEMINI_API_KEY: ${{ secrets.GEMINI_API_KEY }}
           MAX_ITERATIONS: ${{ inputs.max_iterations || '20' }}
         run: |
           echo "Starting experiment on branch: $(git branch --show-current)"
