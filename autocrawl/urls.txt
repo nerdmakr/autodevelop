@@ -1,0 +1,11 @@
+# 테스트 URL — 플랫폼별 1개씩
+# 실험 시작 전에 실제 상품 URL로 교체
+
+# 무신사
+https://www.musinsa.com/products/3397979
+
+# 쿠팡
+https://www.coupang.com/vp/products/7335597975
+
+# 네이버 스마트스토어
+https://smartstore.naver.com/example/products/10000000000

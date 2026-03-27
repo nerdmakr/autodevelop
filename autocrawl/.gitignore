@@ -1,0 +1,23 @@
+# 실험 로그 (git에 안 넣음 — autoresearch 패턴)
+results.tsv
+results.jsonl
+run.log
+
+# 추출 결과
+output/
+
+# Node
+node_modules/
+package-lock.json
+
+# TypeScript
+*.js
+*.js.map
+*.d.ts
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Docker
+docker/.env

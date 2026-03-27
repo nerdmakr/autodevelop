@@ -1,0 +1,8 @@
+services:
+  browser:
+    build: ./docker
+    ports:
+      - "9222:9222"
+    environment:
+      - DISPLAY=:99
+    restart: unless-stopped

@@ -1,0 +1,253 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<title>autocrawl dashboard</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: "SF Mono", "Menlo", monospace; background: #0a0a0a; color: #e0e0e0; padding: 24px; }
+  h1 { font-size: 16px; color: #888; margin-bottom: 20px; }
+  .stats { display: flex; gap: 16px; margin-bottom: 24px; }
+  .stat { background: #161616; border: 1px solid #2a2a2a; border-radius: 8px; padding: 16px 20px; min-width: 140px; }
+  .stat-label { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 1px; }
+  .stat-value { font-size: 28px; font-weight: bold; margin-top: 4px; }
+  .stat-value.green { color: #4ade80; }
+  .stat-value.yellow { color: #facc15; }
+  .stat-value.red { color: #f87171; }
+
+  .chart-container { background: #161616; border: 1px solid #2a2a2a; border-radius: 8px; padding: 20px; margin-bottom: 24px; }
+  .chart-title { font-size: 12px; color: #666; margin-bottom: 12px; text-transform: uppercase; letter-spacing: 1px; }
+  canvas { width: 100% !important; height: 200px !important; }
+
+  table { width: 100%; border-collapse: collapse; background: #161616; border: 1px solid #2a2a2a; border-radius: 8px; overflow: hidden; }
+  th { font-size: 11px; color: #666; text-transform: uppercase; letter-spacing: 1px; text-align: left; padding: 10px 12px; border-bottom: 1px solid #2a2a2a; }
+  td { padding: 8px 12px; border-bottom: 1px solid #1a1a1a; font-size: 13px; }
+  tr:hover { background: #1a1a1a; }
+  .keep { color: #4ade80; }
+  .discard { color: #f87171; }
+  .crash { color: #f87171; font-weight: bold; }
+  .pending { color: #facc15; }
+
+  .field-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 8px; }
+  .field-bar { background: #161616; border: 1px solid #2a2a2a; border-radius: 6px; padding: 8px 12px; }
+  .field-name { font-size: 11px; color: #888; }
+  .field-pct { font-size: 16px; font-weight: bold; margin-top: 2px; }
+  .bar-bg { height: 4px; background: #2a2a2a; border-radius: 2px; margin-top: 6px; }
+  .bar-fill { height: 4px; border-radius: 2px; transition: width 0.3s; }
+
+  .section { margin-bottom: 24px; }
+  .section-title { font-size: 12px; color: #666; text-transform: uppercase; letter-spacing: 1px; margin-bottom: 12px; }
+
+  .drop-zone { border: 2px dashed #333; border-radius: 8px; padding: 40px; text-align: center; color: #555; margin-bottom: 24px; cursor: pointer; }
+  .drop-zone:hover { border-color: #555; color: #888; }
+  .drop-zone.hidden { display: none; }
+
+  .url-detail { margin-top: 8px; }
+  .url-row { display: flex; align-items: center; gap: 8px; padding: 4px 0; font-size: 12px; }
+  .url-cov { width: 50px; text-align: right; font-weight: bold; }
+  .url-name { color: #888; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+</style>
+</head>
+<body>
+
+<h1>autocrawl dashboard</h1>
+
+<div class="drop-zone" id="dropZone">
+  results.jsonl 파일을 드래그하거나 클릭해서 로드<br>
+  <small style="color:#444">또는 같은 폴더에서 python3 -m http.server 로 serve</small>
+  <input type="file" id="fileInput" accept=".jsonl" style="display:none">
+</div>
+
+<div id="content" style="display:none">
+
+<div class="stats" id="statsBar"></div>
+
+<div class="chart-container">
+  <div class="chart-title">coverage over experiments</div>
+  <canvas id="coverageChart"></canvas>
+</div>
+
+<div class="section">
+  <div class="section-title">field coverage (latest)</div>
+  <div class="field-grid" id="fieldGrid"></div>
+</div>
+
+<div class="section">
+  <div class="section-title">experiment history</div>
+  <table>
+    <thead><tr>
+      <th>#</th><th>commit</th><th>coverage</th><th>required</th><th>urls</th><th>status</th><th>description</th><th>time</th>
+    </tr></thead>
+    <tbody id="historyTable"></tbody>
+  </table>
+</div>
+
+<div class="section">
+  <div class="section-title">per-url breakdown (latest)</div>
+  <div id="urlDetail" class="url-detail"></div>
+</div>
+
+</div>
+
+<script>
+const dropZone = document.getElementById('dropZone');
+const fileInput = document.getElementById('fileInput');
+
+dropZone.addEventListener('click', () => fileInput.click());
+dropZone.addEventListener('dragover', e => { e.preventDefault(); dropZone.style.borderColor = '#4ade80'; });
+dropZone.addEventListener('dragleave', () => { dropZone.style.borderColor = '#333'; });
+dropZone.addEventListener('drop', e => { e.preventDefault(); handleFile(e.dataTransfer.files[0]); });
+fileInput.addEventListener('change', e => handleFile(e.target.files[0]));
+
+// Try auto-load
+fetch('results.jsonl').then(r => r.ok ? r.text() : Promise.reject()).then(render).catch(() => {});
+
+function handleFile(file) {
+  if (!file) return;
+  file.text().then(render);
+}
+
+function render(text) {
+  const lines = text.trim().split('\n').map(l => JSON.parse(l));
+  if (lines.length === 0) return;
+
+  dropZone.classList.add('hidden');
+  document.getElementById('content').style.display = 'block';
+
+  const latest = lines[lines.length - 1];
+  const best = lines.reduce((a, b) => (b.summary.avg_coverage > a.summary.avg_coverage) ? b : a);
+
+  // Stats
+  document.getElementById('statsBar').innerHTML = `
+    <div class="stat">
+      <div class="stat-label">experiments</div>
+      <div class="stat-value">${lines.length}</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">latest coverage</div>
+      <div class="stat-value ${covClass(latest.summary.avg_coverage)}">${(latest.summary.avg_coverage * 100).toFixed(1)}%</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">best coverage</div>
+      <div class="stat-value green">${(best.summary.avg_coverage * 100).toFixed(1)}%</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">required fields</div>
+      <div class="stat-value ${covClass(latest.summary.avg_required)}">${(latest.summary.avg_required * 100).toFixed(1)}%</div>
+    </div>
+    <div class="stat">
+      <div class="stat-label">urls tested</div>
+      <div class="stat-value">${latest.summary.total_urls}</div>
+    </div>
+  `;
+
+  // Chart
+  drawChart(lines);
+
+  // Field grid (latest)
+  const fc = latest.field_coverage;
+  document.getElementById('fieldGrid').innerHTML = Object.entries(fc)
+    .sort((a, b) => a[1] - b[1])
+    .map(([field, rate]) => `
+      <div class="field-bar">
+        <div class="field-name">${field}</div>
+        <div class="field-pct" style="color:${covColor(rate)}">${(rate * 100).toFixed(0)}%</div>
+        <div class="bar-bg"><div class="bar-fill" style="width:${rate * 100}%;background:${covColor(rate)}"></div></div>
+      </div>
+    `).join('');
+
+  // History table
+  document.getElementById('historyTable').innerHTML = lines.map((l, i) => `
+    <tr>
+      <td>${i + 1}</td>
+      <td style="font-family:monospace">${l.commit}</td>
+      <td style="color:${covColor(l.summary.avg_coverage)}">${(l.summary.avg_coverage * 100).toFixed(1)}%</td>
+      <td>${(l.summary.avg_required * 100).toFixed(1)}%</td>
+      <td>${l.summary.total_urls}</td>
+      <td class="${l.description?.includes('baseline') ? 'keep' : ''}">${l.status || 'pending'}</td>
+      <td>${l.description || ''}</td>
+      <td style="color:#555">${l.timestamp ? new Date(l.timestamp).toLocaleTimeString('ko') : ''}</td>
+    </tr>
+  `).reverse().join('');
+
+  // Per-URL detail (latest)
+  if (latest.per_url) {
+    document.getElementById('urlDetail').innerHTML = latest.per_url
+      .sort((a, b) => a.coverage - b.coverage)
+      .map(u => `
+        <div class="url-row">
+          <span class="url-cov" style="color:${covColor(u.coverage)}">${(u.coverage * 100).toFixed(0)}%</span>
+          <span class="url-name">${u.url}</span>
+          ${u.missing?.length ? `<span style="color:#555;font-size:11px">missing: ${u.missing.slice(0, 3).join(', ')}${u.missing.length > 3 ? '...' : ''}</span>` : ''}
+        </div>
+      `).join('');
+  }
+}
+
+function drawChart(lines) {
+  const canvas = document.getElementById('coverageChart');
+  const ctx = canvas.getContext('2d');
+  const dpr = window.devicePixelRatio || 1;
+  const rect = canvas.getBoundingClientRect();
+  canvas.width = rect.width * dpr;
+  canvas.height = rect.height * dpr;
+  ctx.scale(dpr, dpr);
+
+  const w = rect.width, h = rect.height;
+  const pad = { top: 10, right: 10, bottom: 20, left: 40 };
+  const plotW = w - pad.left - pad.right;
+  const plotH = h - pad.top - pad.bottom;
+
+  const values = lines.map(l => l.summary.avg_coverage * 100);
+  const max = Math.min(100, Math.max(...values) + 10);
+  const min = Math.max(0, Math.min(...values) - 10);
+
+  // Grid
+  ctx.strokeStyle = '#1a1a1a';
+  ctx.lineWidth = 1;
+  for (let i = 0; i <= 4; i++) {
+    const y = pad.top + (plotH / 4) * i;
+    ctx.beginPath(); ctx.moveTo(pad.left, y); ctx.lineTo(w - pad.right, y); ctx.stroke();
+    ctx.fillStyle = '#444';
+    ctx.font = '10px monospace';
+    ctx.textAlign = 'right';
+    ctx.fillText((max - (max - min) * i / 4).toFixed(0) + '%', pad.left - 6, y + 3);
+  }
+
+  if (values.length < 2) return;
+
+  // Line
+  ctx.beginPath();
+  ctx.strokeStyle = '#4ade80';
+  ctx.lineWidth = 2;
+  values.forEach((v, i) => {
+    const x = pad.left + (plotW / (values.length - 1)) * i;
+    const y = pad.top + plotH - ((v - min) / (max - min)) * plotH;
+    i === 0 ? ctx.moveTo(x, y) : ctx.lineTo(x, y);
+  });
+  ctx.stroke();
+
+  // Dots
+  values.forEach((v, i) => {
+    const x = pad.left + (plotW / (values.length - 1)) * i;
+    const y = pad.top + plotH - ((v - min) / (max - min)) * plotH;
+    ctx.beginPath();
+    ctx.arc(x, y, 3, 0, Math.PI * 2);
+    ctx.fillStyle = '#4ade80';
+    ctx.fill();
+  });
+}
+
+function covColor(rate) {
+  if (rate >= 0.7) return '#4ade80';
+  if (rate >= 0.4) return '#facc15';
+  return '#f87171';
+}
+function covClass(rate) {
+  if (rate >= 0.7) return 'green';
+  if (rate >= 0.4) return 'yellow';
+  return 'red';
+}
+</script>
+</body>
+</html>

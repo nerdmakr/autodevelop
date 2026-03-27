@@ -1,0 +1,13 @@
+{
+  "name": "autocrawl",
+  "type": "module",
+  "private": true,
+  "scripts": {
+    "crawl": "tsx run.ts",
+    "eval": "tsx evaluate.ts"
+  },
+  "devDependencies": {
+    "tsx": "^4.19.0",
+    "typescript": "^5.7.0"
+  }
+}
