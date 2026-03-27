@@ -1,0 +1,109 @@
+name: autocrawl experiment
+
+on:
+  workflow_dispatch:
+    inputs:
+      branch:
+        description: "Experiment branch (e.g. autocrawl/mar27)"
+        required: true
+        default: "autocrawl/exp"
+      max_iterations:
+        description: "Max experiment iterations"
+        required: true
+        default: "20"
+
+  # 매일 UTC 15:00 (KST 00:00) 자동 실행
+  # schedule:
+  #   - cron: "0 15 * * *"
+
+jobs:
+  experiment:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+
+    services:
+      browser:
+        image: ghcr.io/${{ github.repository }}/browser:latest
+        ports:
+          - 9222:9222
+
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ inputs.branch || 'main' }}
+          fetch-depth: 0
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+
+      - name: Install dependencies
+        working-directory: autocrawl
+        run: npm install
+
+      - name: Run experiment loop
+        working-directory: autocrawl
+        env:
+          CDP_ENDPOINT: http://localhost:9222
+          ANTHROPIC_API_KEY: ${{ secrets.ANTHROPIC_API_KEY }}
+          MAX_ITERATIONS: ${{ inputs.max_iterations || '20' }}
+        run: |
+          echo "Starting experiment on branch: $(git branch --show-current)"
+          echo "Max iterations: $MAX_ITERATIONS"
+
+          for i in $(seq 1 $MAX_ITERATIONS); do
+            echo ""
+            echo "=== Iteration $i / $MAX_ITERATIONS ==="
+
+            # Run crawl
+            npx tsx run.ts > run.log 2>&1 || true
+
+            # Evaluate
+            npx tsx evaluate.ts 2>&1 | tee eval_output.txt
+
+            # Extract score
+            COVERAGE=$(grep "^avg_coverage:" eval_output.txt | awk '{print $2}' || echo "0.0%")
+            echo "Coverage: $COVERAGE"
+
+            # Results are auto-appended to results.tsv / results.jsonl by evaluate.ts
+          done
+
+      - name: Upload results artifact
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: experiment-results-${{ github.run_number }}
+          path: |
+            autocrawl/results.tsv
+            autocrawl/results.jsonl
+            autocrawl/run.log
+            autocrawl/output/
+
+      - name: Prepare Pages content
+        if: always()
+        working-directory: autocrawl
+        run: |
+          mkdir -p pages
+          cp dashboard.html pages/index.html
+          cp results.jsonl pages/results.jsonl 2>/dev/null || echo "[]" > pages/results.jsonl
+
+      - name: Upload Pages artifact
+        if: always()
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: autocrawl/pages
+
+  deploy-pages:
+    needs: experiment
+    if: always()
+    runs-on: ubuntu-latest
+    permissions:
+      pages: write
+      id-token: write
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy.outputs.page_url }}
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy
+        uses: actions/deploy-pages@v4
